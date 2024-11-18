@@ -22,17 +22,17 @@ import cn.think.in.java.raft.server.impl.RedisStateMachine;
 import lombok.Getter;
 
 /**
- *
  * 快照存储类型
  *
  * @author rensailong
  */
 @Getter
 public enum StateMachineSaveType {
-    /** sy */
+    /**
+     * sy
+     */
     REDIS("redis", "redis存储", RedisStateMachine.getInstance()),
-    ROCKS_DB("RocksDB", "RocksDB本地存储", DefaultStateMachine.getInstance())
-    ;
+    ROCKS_DB("RocksDB", "RocksDB本地存储", DefaultStateMachine.getInstance());
 
     public StateMachine getStateMachine() {
         return this.stateMachine;

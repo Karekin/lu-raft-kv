@@ -34,7 +34,7 @@ public interface Consensus {
      *
      * 接收者实现：
      *
-     *      如果term < currentTerm返回 false （5.2 节）
+     *      如果 term < currentTerm，返回 false （5.2 节）
      *      如果 votedFor 为空或者就是 candidateId，并且候选人的日志至少和自己一样新，那么就投票给他（5.2 节，5.4 节）
      * @return
      */

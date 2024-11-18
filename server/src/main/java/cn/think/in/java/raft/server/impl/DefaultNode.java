@@ -52,14 +52,22 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 @Slf4j
 public class DefaultNode implements Node, ClusterMembershipChanges {
 
-    /** 选举时间间隔基数 */
+    /**
+     * 选举时间间隔基数
+     */
     public volatile long electionTime = 15 * 1000;
-    /** 上一次选举时间 */
+    /**
+     * 上一次选举时间
+     */
     public volatile long preElectionTime = 0;
 
-    /** 上次一心跳时间戳 */
+    /**
+     * 上次一心跳时间戳
+     */
     public volatile long preHeartBeatTime = 0;
-    /** 心跳间隔基数 */
+    /**
+     * 心跳间隔基数
+     */
     public final long heartBeatTick = 5 * 100;
 
 
@@ -83,29 +91,43 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     /* ============ 所有服务器上持久存在的 ============= */
 
-    /** 服务器最后一次知道的任期号（初始化为 0，持续递增） */
+    /**
+     * 服务器最后一次知道的任期号（初始化为 0，持续递增）
+     */
     volatile long currentTerm = 0;
-    /** 在当前获得选票的候选人的 Id */
+    /**
+     * 在当前获得选票的候选人的 Id
+     */
     volatile String votedFor;
-    /** 日志条目集；每一个条目包含一个用户状态机执行的指令，和收到时的任期号 */
+    /**
+     * 日志条目集；每一个条目包含一个用户状态机执行的指令，和收到时的任期号
+     */
     LogModule logModule;
 
 
 
     /* ============ 所有服务器上经常变的 ============= */
 
-    /** 已知的最大的已经被提交的日志条目的索引值 */
+    /**
+     * 已知的最大的已经被提交的日志条目的索引值
+     */
     volatile long commitIndex;
 
-    /** 最后被应用到状态机的日志条目索引值（初始化为 0，持续递增) */
+    /**
+     * 最后被应用到状态机的日志条目索引值（初始化为 0，持续递增)
+     */
     volatile long lastApplied = 0;
 
     /* ========== 在领导人里经常改变的(选举后重新初始化) ================== */
 
-    /** 对于每一个服务器，需要发送给他的下一个日志条目的索引值（初始化为领导人最后索引值加一） */
+    /**
+     * 对于每一个服务器，需要发送给他的下一个日志条目的索引值（初始化为领导人最后索引值加一）
+     */
     Map<Peer, Long> nextIndexs;
 
-    /** 对于每一个服务器，已经复制给他的日志的最高索引值 */
+    /**
+     * 对于每一个服务器，已经复制给他的日志的最高索引值
+     */
     Map<Peer, Long> matchIndexs;
 
 
@@ -122,7 +144,9 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     /* ============================== */
 
-    /** 一致性模块实现 */
+    /**
+     * 一致性模块实现
+     */
     Consensus consensus;
 
     ClusterMembershipChanges delegate;
@@ -335,7 +359,9 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
     }
 
 
-    /** 复制到其他机器 */
+    /**
+     * 复制到其他机器
+     */
     public Future<Boolean> replication(Peer peer, LogEntry entry) {
 
         return RaftThreadPool.submit(() -> {
@@ -445,7 +471,9 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     class ReplicationFailQueueConsumer implements Runnable {
 
-        /** 一分钟 */
+        /**
+         * 一分钟
+         */
         long intervalTime = 1000 * 60;
 
         @Override
@@ -511,10 +539,10 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     /**
      * 1. 在转变成候选人后就立即开始选举过程
-     * 自增当前的任期号（currentTerm）
-     * 给自己投票
-     * 重置选举超时计时器
-     * 发送请求投票的 RPC 给其他所有服务器
+     *      自增当前的任期号（currentTerm）
+     *      给自己投票
+     *      重置选举超时计时器
+     *      发送请求投票的 RPC 给其他所有服务器
      * 2. 如果接收到大多数服务器的选票，那么就变成领导人
      * 3. 如果接收到来自新的领导人的附加日志 RPC，转变成跟随者
      * 4. 如果选举过程超时，再次发起一轮选举
