@@ -468,50 +468,76 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
         return entry;
     }
 
-
+    /**
+     * 用途：该类用于处理复制失败的任务队列，尝试通过线程池重试执行复制任务，确保分布式系统中的一致性和数据同步。
+     * 特点：
+     *  支持定时任务消费。
+     *  确保任务只在 Leader 节点上执行，避免无效操作。
+     *  异常处理和日志记录增强了系统的可观测性与可靠性。
+     */
     class ReplicationFailQueueConsumer implements Runnable {
 
         /**
-         * 一分钟
+         * 定义任务重试的时间间隔（1分钟）
          */
         long intervalTime = 1000 * 60;
 
+        /**
+         * 核心运行方法，负责消费复制失败队列中的任务，并尝试重新执行复制任务
+         */
         @Override
         public void run() {
+            // 循环运行，直到外部控制变量 `running` 被设置为 false
             while (running) {
                 try {
+                    // 从复制失败队列中获取任务，设置超时时间为 1000 毫秒
                     ReplicationFailModel model = replicationFailQueue.poll(1000, MILLISECONDS);
+
+                    // 如果没有任务（队列为空），继续等待
                     if (model == null) {
                         continue;
                     }
+
+                    // 如果当前节点状态不是 Leader，则清空队列，跳过处理
                     if (status != NodeStatus.LEADER) {
-                        // 应该清空?
-                        replicationFailQueue.clear();
+                        replicationFailQueue.clear(); // 清空队列
                         continue;
                     }
+
+                    // 打印日志，表示从失败队列中取出任务，并准备重试
                     log.warn("replication Fail Queue Consumer take a task, will be retry replication, content detail : [{}]", model.logEntry);
+
+                    // 检查任务进入队列的时间与当前时间的差值
                     long offerTime = model.offerTime;
                     if (System.currentTimeMillis() - offerTime > intervalTime) {
+                        // 如果任务在队列中等待的时间超过了指定的时间间隔，打印警告日志
                         log.warn("replication Fail event Queue maybe full or handler slow");
                     }
 
+                    // 从任务模型中获取可调用的重试逻辑
                     Callable callable = model.callable;
+
+                    // 提交任务到 Raft 的线程池执行，返回 Future 对象以获取执行结果
                     Future<Boolean> future = RaftThreadPool.submit(callable);
+
+                    // 设置任务的最大等待时间为 3000 毫秒，获取任务执行结果
                     Boolean r = future.get(3000, MILLISECONDS);
-                    // 重试成功.
+
+                    // 如果重试成功，则可能需要应用到状态机
                     if (r) {
-                        // 可能有资格应用到状态机.
-                        tryApplyStateMachine(model);
+                        tryApplyStateMachine(model); // 调用状态机应用逻辑
                     }
 
                 } catch (InterruptedException e) {
-                    // ignore
+                    // 如果线程被中断，忽略异常并继续运行
                 } catch (ExecutionException | TimeoutException e) {
+                    // 如果任务执行异常或超时，打印警告日志
                     log.warn(e.getMessage());
                 }
             }
         }
     }
+
 
     private void tryApplyStateMachine(ReplicationFailModel model) {
 
@@ -539,10 +565,10 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     /**
      * 1. 在转变成候选人后就立即开始选举过程
-     *      自增当前的任期号（currentTerm）
-     *      给自己投票
-     *      重置选举超时计时器
-     *      发送请求投票的 RPC 给其他所有服务器
+         * 自增当前的任期号（currentTerm）
+         * 给自己投票
+         * 重置选举超时计时器
+         * 发送请求投票的 RPC 给其他所有服务器
      * 2. 如果接收到大多数服务器的选票，那么就变成领导人
      * 3. 如果接收到来自新的领导人的附加日志 RPC，转变成跟随者
      * 4. 如果选举过程超时，再次发起一轮选举
@@ -552,49 +578,64 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
         @Override
         public void run() {
 
+            // 如果当前节点已经是 Leader，则不需要发起选举，直接返回
             if (status == NodeStatus.LEADER) {
                 return;
             }
 
+            // 获取当前时间
             long current = System.currentTimeMillis();
-            // 基于 RAFT 的随机时间,解决冲突.
+
+            // 增加随机时间以解决选举冲突（RAFT 中的随机超时时间）
             electionTime = electionTime + ThreadLocalRandom.current().nextInt(50);
+
+            // 如果当前时间减去上次选举的时间小于随机选举时间，则暂不发起选举
             if (current - preElectionTime < electionTime) {
                 return;
             }
+
+            // 将节点状态设置为候选者
             status = NodeStatus.CANDIDATE;
             log.error("node {} will become CANDIDATE and start election leader, current term : [{}], LastEntry : [{}]",
                     peerSet.getSelf(), currentTerm, logModule.getLast());
 
+            // 设置下一次选举的时间，加随机值（避免节点同时发起选举导致冲突）
             preElectionTime = System.currentTimeMillis() + ThreadLocalRandom.current().nextInt(200) + 150;
 
+            // 自增当前的任期
             currentTerm = currentTerm + 1;
-            // 推荐自己.
+
+            // 自己投自己一票
             votedFor = peerSet.getSelf().getAddr();
 
+            // 获取集群中除自己以外的所有节点
             List<Peer> peers = peerSet.getPeersWithOutSelf();
 
+            // 保存每个节点的选票结果
             ArrayList<Future<RvoteResult>> futureArrayList = new ArrayList<>();
 
             log.info("peerList size : {}, peer list content : {}", peers.size(), peers);
 
-            // 发送请求
+            // 向其他节点发送选票请求
             for (Peer peer : peers) {
-
+                // 提交选票请求到线程池执行
                 futureArrayList.add(RaftThreadPool.submit(() -> {
                     long lastTerm = 0L;
+                    // 获取日志中最后一条记录的任期
                     LogEntry last = logModule.getLast();
                     if (last != null) {
                         lastTerm = last.getTerm();
                     }
 
-                    RvoteParam param = RvoteParam.builder().
-                            term(currentTerm).
-                            candidateId(peerSet.getSelf().getAddr()).
-                            lastLogIndex(LongConvert.convert(logModule.getLastIndex())).
-                            lastLogTerm(lastTerm).
-                            build();
+                    // 构建选票请求参数
+                    RvoteParam param = RvoteParam.builder()
+                            .term(currentTerm)
+                            .candidateId(peerSet.getSelf().getAddr())
+                            .lastLogIndex(LongConvert.convert(logModule.getLastIndex()))
+                            .lastLogTerm(lastTerm)
+                            .build();
 
+                    // 构建 RPC 请求
                     Request request = Request.builder()
                             .cmd(Request.R_VOTE)
                             .obj(param)
@@ -602,32 +643,39 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
                             .build();
 
                     try {
+                        // 发送 RPC 请求
                         return getRpcClient().<RvoteResult>send(request);
                     } catch (RaftRemotingException e) {
+                        // 记录 RPC 失败日志
                         log.error("ElectionTask RPC Fail , URL : " + request.getUrl());
                         return null;
                     }
                 }));
             }
 
+            // 用于统计成功的选票数量
             AtomicInteger success2 = new AtomicInteger(0);
+
+            // 倒计时锁，用于等待所有选票结果
             CountDownLatch latch = new CountDownLatch(futureArrayList.size());
 
             log.info("futureArrayList.size() : {}", futureArrayList.size());
-            // 等待结果.
+
+            // 处理每个选票的返回结果
             for (Future<RvoteResult> future : futureArrayList) {
                 RaftThreadPool.submit(() -> {
                     try {
+                        // 等待选票结果，超时时间为 3000 毫秒
                         RvoteResult result = future.get(3000, MILLISECONDS);
                         if (result == null) {
                             return -1;
                         }
-                        boolean isVoteGranted = result.isVoteGranted();
 
-                        if (isVoteGranted) {
-                            success2.incrementAndGet();
+                        // 如果选票被授予
+                        if (result.isVoteGranted()) {
+                            success2.incrementAndGet(); // 成功票数加一
                         } else {
-                            // 更新自己的任期.
+                            // 如果选票未被授予，可能需要更新当前任期
                             long resTerm = result.getTerm();
                             if (resTerm >= currentTerm) {
                                 currentTerm = resTerm;
@@ -638,40 +686,45 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
                         log.error("future.get exception , e : ", e);
                         return -1;
                     } finally {
+                        // 选票处理完成，倒计时锁减一
                         latch.countDown();
                     }
                 });
             }
 
             try {
-                // 稍等片刻
+                // 等待所有选票结果完成，最多等待 3500 毫秒
                 latch.await(3500, MILLISECONDS);
             } catch (InterruptedException e) {
                 log.warn("InterruptedException By Master election Task");
             }
 
+            // 获取成功票数
             int success = success2.get();
             log.info("node {} maybe become leader , success count = {} , status : {}", peerSet.getSelf(), success, NodeStatus.Enum.value(status));
-            // 如果投票期间,有其他服务器发送 appendEntry , 就可能变成 follower ,这时,应该停止.
+
+            // 如果在选举期间状态变为 FOLLOWER，则停止后续逻辑
             if (status == NodeStatus.FOLLOWER) {
                 return;
             }
-            // 加上自身.
+
+            // 如果成功票数超过集群节点的一半，成为 Leader
             if (success >= peers.size() / 2) {
                 log.warn("node {} become leader ", peerSet.getSelf());
-                status = NodeStatus.LEADER;
-                peerSet.setLeader(peerSet.getSelf());
-                votedFor = "";
-                becomeLeaderToDoThing();
+                status = NodeStatus.LEADER; // 设置节点状态为 LEADER
+                peerSet.setLeader(peerSet.getSelf()); // 设置自己为 Leader
+                votedFor = ""; // 清空已投票信息
+                becomeLeaderToDoThing(); // 执行成为 Leader 后的逻辑
             } else {
-                // else 重新选举
+                // 如果选举失败，清空已投票信息，准备重新选举
                 votedFor = "";
             }
-            // 再次更新选举时间
-            preElectionTime = System.currentTimeMillis() + ThreadLocalRandom.current().nextInt(200) + 150;
 
+            // 再次更新选举时间，加随机值
+            preElectionTime = System.currentTimeMillis() + ThreadLocalRandom.current().nextInt(200) + 150;
         }
     }
+
 
     /**
      * 初始化所有的 nextIndex 值为自己的最后一条日志的 index + 1. 如果下次 RPC 时, 跟随者和leader 不一致,就会失败.
@@ -765,61 +818,82 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
 
     }
 
-
+    /**
+     * 心跳机制的作用
+         * 维持领导权：心跳包可以告知跟随者节点当前的领导者仍然有效，从而避免跟随者发起选举。
+         * 日志同步：通过心跳包中的 leaderCommit，领导者可以通知跟随者同步已提交的日志。
+         * 故障检测：如果跟随者没有在规定时间内收到心跳，会认为领导者失效并发起选举。
+     */
     class HeartBeatTask implements Runnable {
 
         @Override
         public void run() {
 
+            // 如果当前节点的状态不是 LEADER（领导者），则不执行心跳任务
             if (status != NodeStatus.LEADER) {
                 return;
             }
 
+            // 获取当前时间
             long current = System.currentTimeMillis();
+
+            // 如果当前时间距离上一次发送心跳的时间小于心跳间隔（heartBeatTick），则不发送心跳
             if (current - preHeartBeatTime < heartBeatTick) {
                 return;
             }
+
+            // 打印日志，显示每个节点的 nextIndex 值（用于日志复制的下一个索引）
             log.info("=========== NextIndex =============");
             for (Peer peer : peerSet.getPeersWithOutSelf()) {
                 log.info("Peer {} nextIndex={}", peer.getAddr(), nextIndexs.get(peer));
             }
 
+            // 更新上一次心跳的时间戳
             preHeartBeatTime = System.currentTimeMillis();
 
-            // 心跳只关心 term 和 leaderID
+            // 心跳只包含当前任期（term）和领导者 ID（leaderId）
             for (Peer peer : peerSet.getPeersWithOutSelf()) {
-
+                // 构造心跳包参数
                 AentryParam param = AentryParam.builder()
-                        .entries(null)// 心跳,空日志.
-                        .leaderId(peerSet.getSelf().getAddr())
-                        .serverId(peer.getAddr())
-                        .term(currentTerm)
-                        .leaderCommit(commitIndex) // 心跳时与跟随者同步 commit index
+                        .entries(null) // 心跳中不包含日志条目，表示为空日志
+                        .leaderId(peerSet.getSelf().getAddr()) // 当前领导者的地址
+                        .serverId(peer.getAddr()) // 目标跟随者节点的地址
+                        .term(currentTerm) // 当前任期
+                        .leaderCommit(commitIndex) // 向跟随者同步已提交的日志索引
                         .build();
 
+                // 构造 RPC 请求
                 Request request = new Request(
-                        Request.A_ENTRIES,
-                        param,
-                        peer.getAddr());
+                        Request.A_ENTRIES, // 请求类型：AppendEntries
+                        param,             // 请求参数
+                        peer.getAddr()     // 跟随者节点地址
+                );
 
+                // 将心跳任务提交到线程池异步执行
                 RaftThreadPool.execute(() -> {
                     try {
+                        // 发送心跳请求并获取响应结果
                         AentryResult aentryResult = getRpcClient().send(request);
+
+                        // 获取响应中的任期
                         long term = aentryResult.getTerm();
 
+                        // 如果响应中的任期比当前节点的任期大，说明出现了更高任期的领导者
                         if (term > currentTerm) {
                             log.error("self will become follower, he's term : {}, my term : {}", term, currentTerm);
-                            currentTerm = term;
-                            votedFor = "";
-                            status = NodeStatus.FOLLOWER;
+                            currentTerm = term; // 更新当前节点的任期
+                            votedFor = ""; // 清空已投票的记录
+                            status = NodeStatus.FOLLOWER; // 切换节点状态为 FOLLOWER（跟随者）
                         }
                     } catch (Exception e) {
+                        // 如果心跳请求失败，记录错误日志
                         log.error("HeartBeatTask RPC Fail, request URL : {} ", request.getUrl());
                     }
-                }, false);
+                }, false); // 第二个参数 false 表示异步执行，不阻塞主线程
             }
         }
     }
+
 
     @Override
     public Result addPeer(Peer newPeer) {
