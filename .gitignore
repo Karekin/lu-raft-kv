@@ -5,3 +5,22 @@ lu-raft/.idea
 /rocksDB-raft
 .idea
 target/
+
+# 忽略 rocksDB 生成的日志和临时文件
+server/rocksDB-raft/*/test/*.log
+server/rocksDB-raft/*/test/CURRENT
+server/rocksDB-raft/*/test/IDENTITY
+server/rocksDB-raft/*/test/LOCK
+server/rocksDB-raft/*/test/LOG
+server/rocksDB-raft/*/test/MANIFEST-*
+server/rocksDB-raft/*/test/OPTIONS-*
+
+# 忽略 Raft 服务器日志
+raft-server-logs/raft-server.log.*
+
+# 忽略 raft-server.log 文件
+raft-server.log
+
+# 忽略 raft-server-logs 文件夹及其所有内容
+server/raft-server-logs/
+
