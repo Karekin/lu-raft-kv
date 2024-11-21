@@ -130,7 +130,9 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
      */
     Map<Peer, Long> matchIndexs;
 
-
+    /**
+     * 什么时候 update 这两个追踪值？ledader 发送了”附加日志“请求，并获取到了返回值后
+     */
 
     /* ============================== */
 
@@ -236,7 +238,7 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
     /**
      * 客户端的每一个请求都包含一条被复制状态机执行的指令。
      * 领导人把这条指令作为一条新的日志条目附加到日志中去，然后并行的发起附加条目 RPCs 给其他的服务器，让他们复制这条日志条目。
-     * 当这条日志条目被安全的复制（下面会介绍），领导人会应用这条日志条目到它的状态机中然后把执行的结果返回给客户端。
+     * 当这条日志条目被安全的复制（下面会介绍），领导人会应用这条日志条目到它的状态机中，然后把执行的结果返回给客户端。
      * 如果跟随者崩溃或者运行缓慢，再或者网络丢包，
      * 领导人会不断的重复尝试附加日志条目 RPCs （尽管已经回复了客户端）直到所有的跟随者都最终存储了所有的日志条目。
      *
@@ -255,6 +257,7 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
             return redirect(request);
         }
 
+        // TODO 读请求的话，follower 可以完成，没必要全都压给 leader
         if (request.getType() == ClientKVReq.GET) {
             LogEntry logEntry = stateMachine.get(request.getKey());
             if (logEntry != null) {
@@ -271,7 +274,7 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
                 .term(currentTerm)
                 .build();
 
-        // 预提交到本地日志, TODO 预提交
+        // 预提交到本地日志, 给logEntry赋index值   TODO 预提交
         logModule.write(logEntry);
         log.info("write logModule success, logEntry info : {}, log index : {}", logEntry, logEntry.getIndex());
 
@@ -318,14 +321,14 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
         if (N > commitIndex) {
             LogEntry entry = logModule.read(N);
             if (entry != null && entry.getTerm() == currentTerm) {
-                commitIndex = N;
+                commitIndex = N;  // TODO commitIndex 之后没用到，更新这个值的目的是什么？（心跳？复制？代表本轮更新的整体进度？）
             }
         }
 
         //  响应客户端(成功一半)
         if (success.get() >= (count / 2)) {
             // 更新
-            commitIndex = logEntry.getIndex();
+            commitIndex = logEntry.getIndex(); // TODO 另一半失败的不管了？
             //  应用到状态机
             getStateMachine().apply(logEntry);
             lastApplied = commitIndex;
@@ -389,7 +392,7 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
                         }
                     }
                 } else {
-                    logEntries.add(entry);
+                    logEntries.add(entry); // TODO follower 的日志比 leader 发的新，不用删除多出来的？
                 }
                 // 最小的那个日志.
                 LogEntry preLog = getPreLog(logEntries.getFirst());
@@ -430,10 +433,10 @@ public class DefaultNode implements Node, ClusterMembershipChanges {
                             if (nextIndex == 0) {
                                 nextIndex = 1L;
                             }
-                            nextIndexs.put(peer, nextIndex - 1);
+                            nextIndexs.put(peer, nextIndex - 1); // TODO 这块处理好像有点问题，每次退一步有点慢
                             log.warn("follower {} nextIndex not match, will reduce nextIndex and retry RPC append, nextIndex : [{}]", peer.getAddr(),
                                     nextIndex);
-                            // 重来, 直到成功.
+                            // 重来, 直到成功.  TODO 重试机制是咋实现的？
                         }
                     }
 

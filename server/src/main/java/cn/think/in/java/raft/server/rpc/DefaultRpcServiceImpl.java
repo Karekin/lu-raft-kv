@@ -112,7 +112,7 @@ public class DefaultRpcServiceImpl implements RpcService {
             return new Response<>(node.handlerRequestVote((RvoteParam) request.getObj()));
         } else if (request.getCmd() == Request.A_ENTRIES) {
             return new Response<>(node.handlerAppendEntries((AentryParam) request.getObj()));
-        } else if (request.getCmd() == Request.CLIENT_REQ) {
+        } else if (request.getCmd() == Request.CLIENT_REQ) { // 如何实现请求路由的？为什么 CLIENT_REQ 可以随机发送？负载均衡是在客户端实现的
             return new Response<>(node.handlerClientRequest((ClientKVReq) request.getObj()));
         } else if (request.getCmd() == Request.CHANGE_CONFIG_REMOVE) {
             return new Response<>(((ClusterMembershipChanges) node).removePeer((Peer) request.getObj()));

@@ -189,7 +189,7 @@ public class DefaultConsensus implements Consensus {
                         return result; // 日志任期不匹配，返回失败
                     }
                 } else {
-                    return result; // 日志索引不匹配，返回失败
+                    return result; // 日志索引不匹配，返回失败 TODO 失败后怎么办？该怎么调整？
                 }
             }
 
